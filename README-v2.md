@@ -26,7 +26,7 @@ Gemini Interactions API выполняет запрос в фоновом реж
 
 - `GEMINI_API_KEY` — существующий ключ Google AI Studio.
 - `SERPER_API_KEY` — существующий ключ Serper.
-- `GEMINI_BACKGROUND_MODEL` — необязательная модель с поддержкой Interactions background; по умолчанию `gemini-3.1-flash-lite`.
+- `GEMINI_BACKGROUND_MODEL` — необязательная модель с поддержкой Interactions background. По умолчанию пробуется `gemini-3.5-flash-lite`; если проект не поддерживает на ней фоновый режим, используется `gemini-3.1-flash-lite`. При явном указании модели автоматической замены нет.
 
 `GEMINI_MODEL` относится к старому `/api` и не влияет на v2.
 После изменения переменных нужно выполнить Redeploy.
