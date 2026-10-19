@@ -2,7 +2,8 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 
 const VERSION = "2.0.0";
 const BASE = "https://generativelanguage.googleapis.com/v1beta/interactions";
-const DEFAULT_MODEL = "gemini-3.1-flash-lite";
+const DEFAULT_MODEL = "gemini-3.5-flash-lite";
+const BACKUP_MODEL = "gemini-3.1-flash-lite";
 const PROMPT = [
   "Ты Джарвис, голосовой помощник на базе Google Gemini в навыке Яндекс Алисы.",
   "Отвечай по-русски, обычно в 1–3 коротких предложениях, до 650 символов.",
@@ -181,7 +182,8 @@ function createHandler({ env = process.env, fetchImpl = globalThis.fetch, now = 
       return send("Начнём новый разговор. Что хочешь узнать?", "reset");
     }
     if (!text) return send(state.p ? WAIT : "Привет! Я Джарвис на базе Gemini. Задай вопрос. Если ответ задержится, скажи «Продолжай».", "greeting");
-    const isContinue = /^(продолжай|продолжить|готово|ответ готов|давай ответ|проверь ответ|да)$/.test(command);
+    const isContinue = /^(продолжай|продолжить|готово|ответ готов|давай ответ|проверь ответ)$/.test(command)
+      || (command === "да" && Boolean(pending));
     if (isContinue && !pending) return send(inputState.p ? userError(new ServiceError("EXPIRED"))
       : "Сейчас нет ожидающего ответа. Задай новый вопрос.", "nothing_pending");
     let current = pending;
@@ -198,18 +200,26 @@ function createHandler({ env = process.env, fetchImpl = globalThis.fetch, now = 
         }
         const model = env.GEMINI_BACKGROUND_MODEL || DEFAULT_MODEL;
         if (!/^[A-Za-z0-9._-]+$/.test(model)) throw new ServiceError("CONFIG", "gemini");
-        interaction = await gemini(null, {
+        const parameters = {
           model, input, system_instruction: PROMPT,
           background: true, store: true,
           generation_config: { thinking_level: "minimal", max_output_tokens: 600 },
           ...(previous ? { previous_interaction_id: previous.id } : {})
-        }, remaining());
+        };
+        try { interaction = await gemini(null, parameters, remaining()); }
+        catch (error) {
+          // Some projects do not support background execution on 3.5 Flash-Lite yet.
+          if (env.GEMINI_BACKGROUND_MODEL || error.message !== "CONFIG" || remaining() < 700) throw error;
+          log(JSON.stringify({event:"background_model_fallback",model:BACKUP_MODEL}));
+          interaction = await gemini(null, {...parameters,model:BACKUP_MODEL}, remaining());
+        }
         current = token(interaction.id, session);
         state.p = current;
       }
       // Poll only inside this HTTP deadline. The generation itself continues at Google.
       while (remaining() > 250) {
         if (!interaction) interaction = await gemini(current.id, null, remaining());
+        log(JSON.stringify({event:"gemini_status",status:interaction.status,model:interaction.model}));
         if (["completed", "incomplete"].includes(interaction.status)) {
           const answer = outputText(interaction);
           if (!answer) throw new ServiceError("BLOCKED", "gemini");
