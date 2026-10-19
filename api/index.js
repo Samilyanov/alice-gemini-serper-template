@@ -3,7 +3,7 @@ const MAX_HISTORY_MESSAGES = 8;
 const MAX_HISTORY_MESSAGE_CHARS = 1200;
 const MAX_ALICE_TEXT = 1024;
 const TOTAL_RESPONSE_BUDGET_MS = 3800;
-const SERPER_TIMEOUT_MS = 1100;
+const SERPER_TIMEOUT_MS = 3000;
 const GEMINI_TIMEOUT_MS = 2500;
 
 const SYSTEM_PROMPT = [
@@ -105,7 +105,7 @@ async function searchWeb(query, timeoutMs) {
     if (answerBox) items.unshift(`Краткий ответ поисковика: ${String(answerBox).slice(0, 350)}`);
     return items.length ? items.join("\n") : "";
   } catch (error) {
-    console.warn("Serper request did not finish in time; continuing without search.");
+    console.warn("Serper request failed:", error?.name === "AbortError" ? "TIME_BUDGET_EXHAUSTED" : "NETWORK_ERROR");
     return "";
   }
 }
@@ -184,7 +184,7 @@ function errorForUser(error) {
       return "Я не смогла обработать этот запрос. Попробуйте спросить иначе.";
     case "TIME_BUDGET_EXHAUSTED":
     case "AbortError":
-      return "Не успела подготовить ответ. Попробуйте задать вопрос ещё раз, чуть короче.";
+      return "Сервис ответил слишком медленно. Попробуйте ещё раз немного позже.";
     default:
       return "Не получилось получить ответ от нейросети. Попробуйте ещё раз чуть позже.";
   }
@@ -219,18 +219,34 @@ export default async function handler(req, res) {
   }
 
   try {
-    let searchContext = "";
-    if (isSearchIntent(text) && process.env.SERPER_API_KEY) {
-      // Search has a very short budget because Alice expects a response within 4.5 seconds.
-      searchContext = await searchWeb(text, Math.min(SERPER_TIMEOUT_MS, Math.max(0, remainingMs() - 2600)));
+    let answer;
+    if (isSearchIntent(text)) {
+      if (!process.env.SERPER_API_KEY) {
+        return res.status(200).json(aliceResponse(
+          "Поиск пока не настроен. Добавьте SERPER_API_KEY в настройках Vercel.",
+          false, oldHistory
+        ));
+      }
+      // Return search excerpts directly: a second API call can exceed Alice's deadline.
+      const searchContext = await searchWeb(text, Math.min(SERPER_TIMEOUT_MS, remainingMs() - 300));
+      if (!searchContext) {
+        return res.status(200).json(aliceResponse(
+          "Не удалось получить результаты поиска. Попробуйте ещё раз немного позже.",
+          false, oldHistory
+        ));
+      }
+      answer = fitAliceText("Вот выдержки из результатов поиска. " + searchContext
+        .replace(/https?:\/\/\S+/g, "")
+        .replace(/^\d+\.\s*/gm, "")
+        .replace(/\n+/g, " "));
+    } else {
+      answer = await askGemini(
+        text,
+        oldHistory,
+        "",
+        Math.max(0, Math.min(GEMINI_TIMEOUT_MS, remainingMs() - 200))
+      );
     }
-
-    const answer = await askGemini(
-      text,
-      oldHistory,
-      searchContext,
-      Math.max(0, Math.min(GEMINI_TIMEOUT_MS, remainingMs() - 200))
-    );
 
     const history = [
       ...oldHistory,
