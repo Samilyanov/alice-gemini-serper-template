@@ -46,7 +46,7 @@ test('A normal answer uses Gemini background mode and never exposes thoughts or 
   const {payload}=await f.ask('Почему небо голубое?');
   assert.match(payload.response.text,/рассеяния/);
   assert.equal(f.calls[0].body.background,true);
-  assert.equal(f.calls[0].body.model,'gemini-3.1-flash-lite');
+  assert.equal(f.calls[0].body.model,'gemini-3.5-flash-lite');
   assert.equal(f.calls[0].body.generation_config.thinking_level,'minimal');
   assert.doesNotMatch(JSON.stringify([payload,f.logs]),/test-not-a-real-key|PRIVATE|DO NOT READ/);
   assert.ok(payload.session_state.r.sig);
@@ -128,7 +128,7 @@ test('Missing keys produce explicit messages without external requests',async()=
 
 test('Quota, authentication, unavailable models and provider errors are classified',async()=>{
   for(const [status,message] of [[429,/ограничил/],[403,/отклонил/],[400,/Модель/],[503,/связаться/]]){
-    const f=fixture([{status,data:{}}]);assert.match((await f.ask('Вопрос')).payload.response.text,message);
+    const f=fixture([{status,data:{}}],{env:{...env,GEMINI_BACKGROUND_MODEL:'gemini-3.1-flash-lite'}});assert.match((await f.ask('Вопрос')).payload.response.text,message);
     assert.equal(f.logs[0].status,status);
   }
 });
@@ -181,4 +181,10 @@ test('Different sessions remain isolated when requests overlap',async()=>{
   const f=fixture([{data:done('Первый','v1_one')},{data:done('Второй','v1_two')}]);
   const [one,two]=await Promise.all([f.ask('Вопрос',{},'one'),f.ask('Вопрос',{},'two')]);
   assert.notEqual(one.payload.session_state.r.sig,two.payload.session_state.r.sig);
+});
+
+test('Unsupported default background model falls back once to the compatible model',async()=>{
+  const f=fixture([{status:400,data:{}},{data:done('Резервная модель ответила.')}]);
+  const r=await f.ask('Вопрос');assert.equal(r.payload.response.text,'Резервная модель ответила.');
+  assert.equal(f.calls.length,2);assert.equal(f.calls[1].body.model,'gemini-3.1-flash-lite');
 });
